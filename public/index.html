@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<meta name="color-scheme" content="light only">
+<title>DialDesk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="/styles.css">
+<style>
+  html,body{height:100%}
+  body{margin:0;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+  [hidden]{display:none!important}
+  img{max-width:100%}
+</style>
+</head>
+<body>
+<div id="banner"></div>
+<header class="top" id="header" hidden>
+  <div class="wrap">
+    <div class="topbar">
+      <div class="brand"><div class="mark">D</div><h1>DialDesk</h1></div>
+      <div class="who" id="who"></div>
+      <button class="btn sm" id="accountBtn">Account</button>
+      <button class="btn ghost sm" id="logoutBtn">Log out</button>
+    </div>
+    <nav class="tabs" id="tabs" role="tablist"></nav>
+  </div>
+</header>
+<main class="wrap" id="view"><div class="loading">Loading…</div></main>
+<div id="drawerHost"></div>
+<div class="toast" id="toast" hidden></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="/config.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
