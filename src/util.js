@@ -39,6 +39,20 @@ export const STATUS_SQL = {
   ni: "picked = 'yes' AND outcome = 'notint'",
   won: "picked = 'yes' AND outcome = 'converted'",
 };
+/** Keep a lead's extra form answers safe and small: up to 30 short text fields. */
+export function cleanDetails(d) {
+  if (!d || typeof d !== "object" || Array.isArray(d)) return null;
+  const out = {};
+  for (const [k, v] of Object.entries(d).slice(0, 30)) {
+    const key = String(k).trim().slice(0, 60), val = String(v ?? "").trim().slice(0, 300);
+    if (key && val) out[key] = val;
+  }
+  return Object.keys(out).length ? JSON.stringify(out) : null;
+}
+export const parseDetails = (s) => { try { const o = JSON.parse(s || "null"); return o && typeof o === "object" ? o : null; } catch { return null; } };
+/** "p:+917649964672" -> "+917649964672" (Meta prefixes phone numbers with "p:"). */
+export const cleanPhoneText = (v) => str(v, 30).replace(/^[^\d+]+/, "");
+
 /** Partly hide a phone number: 9876543210 -> 98XXXXX210 */
 export const maskPhone = (p) => { const d = String(p ?? "").replace(/\D/g, "").slice(-10); return d.length < 6 ? "XXXXXXXXXX" : d.slice(0, 2) + "X".repeat(d.length - 5) + d.slice(-3); };
 

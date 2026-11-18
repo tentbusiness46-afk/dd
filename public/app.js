@@ -11,6 +11,12 @@ const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
 const localDate = (d = new Date()) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 const fmtDT = (t) => (t ? new Date(t).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "—");
 const telOf = (p) => "tel:+91" + String(p).replace(/\D/g, "").slice(-10);
+const waOf = (p) => "https://wa.me/91" + String(p).replace(/\D/g, "").slice(-10);
+/** "High Intent" style tag from a lead's form answers, if it has one. */
+const priorityOf = (d) => { if (!d) return ""; const k = Object.keys(d).find((x) => /priority|intent/i.test(x)); return k ? d[k] : ""; };
+/** Form answers as a label/value list. */
+const answersHtml = (d) => d && Object.keys(d).length
+  ? `<dl class="answers">${Object.entries(d).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>` : "";
 
 const PICK = [["yes", "Picked up"], ["no", "No answer"], ["busy", "Busy"], ["off", "Switched off"], ["wrong", "Wrong number"]];
 const OUT = [["interested", "Interested"], ["callback", "Call back"], ["notint", "Not interested"], ["converted", "Converted"]];
@@ -248,10 +254,11 @@ const callerOpts = (selected, { blank = "Unassigned" } = {}) =>
 function leadRowHtml(l) {
   const P = ME.perms, M = ME.manage;
   const name = P.notes ? `<button class="linkbtn" data-hist="${l.id}" style="color:var(--fg);text-decoration-style:dotted;text-align:left" title="See call history">${esc(l.name)}</button>` : `<b>${esc(l.name)}</b>`;
+  const hot = priorityOf(l.details);
   return `<tr>${M ? `<td><input type="checkbox" class="sel" data-id="${l.id}" ${sel.has(l.id) ? "checked" : ""} aria-label="Select ${esc(l.name)}"></td>` : ""}
-    <td>${name}</td><td class="num">${esc(l.phone)}</td><td>${esc(l.city)}</td><td>${esc(l.source)}</td>
+    <td>${name}${hot ? ` <span class="tag hot">${esc(hot)}</span>` : ""}</td><td class="num">${esc(l.phone)}</td><td>${esc(l.city)}</td><td>${esc(l.source)}</td>
     <td>${M ? `<select class="asg" data-id="${l.id}" aria-label="Assign caller">${callerOpts(l.assigned_to)}</select>` : esc(cname(l.assigned_to))}</td>
-    <td>${pill(l)}${M && l.outcome === "converted" ? ` <span class="num note">${inr(l.deal_value)}</span>` : ""}</td>
+    <td><span class="stcell">${pill(l)}${M && l.outcome === "converted" ? ` <span class="num note">${inr(l.deal_value)}</span>` : ""}${canEditStatus() ? `<button class="btn ghost sm" data-st="${l.id}" title="Change status">Change</button>` : ""}</span></td>
     ${P.notes ? `<td class="rm" title="${esc(l.remarks)}">${esc(l.remarks) || "—"}</td>` : ""}<td class="note">${fmtDT(l.updated_at)}</td>
     ${M ? `<td>${l.sharedWith.length ? l.sharedWith.map((id) => `<span class="tag on">${esc(aname(id))}</span>`).join("") : '<span class="note">—</span>'}</td>` : ""}</tr>`;
 }
@@ -319,6 +326,7 @@ function bindLeadRows() {
   });
   $$(".asg").forEach((s) => (s.onchange = async () => { try { await api("/manage/leads/assign", { method: "POST", body: { ids: [s.dataset.id], callerId: s.value || null } }); toast(`Assigned to ${cname(s.value)}`); } catch (e) { fail(e); } }));
   $$("[data-hist]").forEach((b) => (b.onclick = () => leadHistory(leadRows.find((l) => l.id === b.dataset.hist))));
+  $$("[data-st]").forEach((b) => (b.onclick = () => statusForm(leadRows.find((l) => l.id === b.dataset.st))));
 }
 /** The leads a bulk action applies to: the ticked rows, or every lead matching the filters. */
 const target = () => (selAllMatching ? { filter: { ...lf } } : { ids: [...sel] });
@@ -385,6 +393,8 @@ async function exportLeads() {
       if (P.notes) o.Remarks = l.remarks || "";
       o["Follow-up"] = l.follow_up || ""; o.Attempts = l.attempts;
       if (P.revenue) o["Sale value"] = l.deal_value || 0;
+      const d = typeof l.details === "string" ? (() => { try { return JSON.parse(l.details); } catch { return null; } })() : l.details;
+      if (d) Object.entries(d).forEach(([k, v]) => { o[k] = v; });
       o["Added on"] = l.created_at ? new Date(l.created_at).toLocaleString("en-IN") : "";
       o["Last update"] = l.updated_at ? new Date(l.updated_at).toLocaleString("en-IN") : "";
       return o;
@@ -398,11 +408,45 @@ async function leadHistory(l) {
   openDrawer({ title: l.name, eyebrow: `<div class="label">Call history</div>`, body: `<div class="loading">Loading…</div>` });
   try {
     const h = await api(`/view/leads/${l.id}/history`);
-    $("#dbody").innerHTML = `<div class="q"><span class="label">Number</span><span class="callnow">${esc(l.phone)}</span><span class="note">${esc(l.city)} · ${esc(l.source)}</span></div>
+    $("#dbody").innerHTML = `<div class="q"><span class="label">Number</span><span class="callnow">${esc(l.phone)}</span><span class="note">${esc(l.city)} · ${esc(l.source)}${l.created_at ? ` · came in ${fmtDT(l.created_at)}` : ""}</span></div>
+      ${l.details ? `<div class="q"><span class="label">Form answers</span>${answersHtml(l.details)}</div>` : ""}
       <div class="hist">${histHtml(h, ME.perms.revenue)}</div>`;
   } catch (e) { $("#dbody").innerHTML = `<div class="err">${esc(e.message)}</div>`; }
 }
-const histHtml = (h, showRev) => h.length ? h.map((x) => `<div><span class="note">${fmtDT(x.created_at)} · ${esc(x.caller || "")}</span><br>${esc(pickLabel(x.picked))}${x.outcome ? " · " + esc(outLabel(x.outcome)) : ""}${x.follow_up ? ` (call back ${esc(x.follow_up)})` : ""}${showRev && x.outcome === "converted" ? ` · ${inr(x.deal_value)}` : ""}${x.remarks ? `<br>${esc(x.remarks)}` : ""}</div>`).join("") : '<span class="note">Not called yet.</span>';
+/** Super admin always; an admin when "Change lead status" is switched on for them. */
+const canEditStatus = () => ME.manage || (ME.user.role === "admin" && ME.perms?.editStatus);
+
+function statusForm(l) {
+  const d = { picked: l.picked || "", outcome: l.outcome || "", remarks: "", followUp: l.follow_up || "", dealValue: l.deal_value || "" };
+  const draw = () => {
+    const keep = () => { if ($("#srm")) d.remarks = $("#srm").value; if ($("#sfu")) d.followUp = $("#sfu").value; if ($("#sdv")) d.dealValue = $("#sdv").value; };
+    openDrawer({
+      title: l.name, saveLabel: "Save status", focus: false,
+      eyebrow: `<div class="label">Change status</div>`,
+      body: `<div class="q"><span class="label">Now</span><div>${pill(l)}</div></div>
+        <div class="q"><span class="label">Did they pick up?</span><div class="opts" id="sop">${PICK.map(([k, v]) => `<button type="button" data-v="${k}" aria-pressed="${d.picked === k}">${v}</button>`).join("")}</div></div>
+        ${d.picked === "yes" ? `<div class="q"><span class="label">Response</span><div class="opts" id="soo">${OUT.map(([k, v]) => `<button type="button" data-v="${k}" aria-pressed="${d.outcome === k}">${v}</button>`).join("")}</div></div>` : ""}
+        ${d.picked === "yes" && d.outcome === "callback" ? `<div class="q"><label class="label" for="sfu">Call back on</label><input type="date" id="sfu" value="${esc(d.followUp || localDate())}"></div>` : ""}
+        ${d.picked === "yes" && d.outcome === "converted" && ME.manage ? `<div class="q"><label class="label" for="sdv">Sale value (₹)</label><input type="number" id="sdv" min="0" value="${esc(d.dealValue)}" placeholder="e.g. 15000"></div>` : ""}
+        <div class="q"><label class="label" for="srm">Note (optional)</label><textarea id="srm" placeholder="Why the status changed">${esc(d.remarks)}</textarea>
+          <span class="note">Leave blank to keep the caller's last note.</span></div>`,
+      bind() {
+        $$("#sop button").forEach((b) => (b.onclick = () => { keep(); d.picked = b.dataset.v; if (d.picked !== "yes") d.outcome = ""; draw(); }));
+        $$("#soo button").forEach((b) => (b.onclick = () => { keep(); d.outcome = b.dataset.v; draw(); }));
+      },
+      onSave: async () => {
+        keep();
+        if (!d.picked) throw new Error("Choose whether they picked up.");
+        if (d.picked === "yes" && !d.outcome) throw new Error("Choose their response.");
+        await api(`/view/leads/${l.id}/status`, { method: "POST", body: d });
+        toast("Status updated"); render();
+      },
+    });
+  };
+  draw();
+}
+
+const histHtml = (h, showRev) => h.length ? h.map((x) => `<div><span class="note">${fmtDT(x.created_at)} · ${esc(x.caller || "")}${x.is_call === 0 ? " · status changed" : ""}</span><br>${esc(pickLabel(x.picked))}${x.outcome ? " · " + esc(outLabel(x.outcome)) : ""}${x.follow_up ? ` (call back ${esc(x.follow_up)})` : ""}${showRev && x.outcome === "converted" ? ` · ${inr(x.deal_value)}` : ""}${x.remarks ? `<br>${esc(x.remarks)}` : ""}</div>`).join("") : '<span class="note">Not called yet.</span>';
 
 /* ----- import (super admin) ----- */
 let pending = null;
@@ -410,8 +454,8 @@ VIEWS.import = {
   async load() {
     [CALLERS, ADMINS] = await Promise.all([api("/view/callers"), api("/manage/admins")]);
     return `<section class="panel"><h2>Import leads from Excel or CSV</h2>
-      <div class="drop" id="drop"><b>Drop a .xlsx, .xls or .csv file here</b><span class="muted">or</span>
-        <label class="btn primary" for="file">Choose file</label><input type="file" id="file" accept=".xlsx,.xls,.csv" hidden>
+      <div class="drop" id="drop"><b>Drop a .xlsx, .xls or .csv file here</b><span class="note">Meta Ads Manager lead downloads work as they are.</span><span class="muted">or</span>
+        <label class="btn primary" for="file">Choose file</label><input type="file" id="file" accept=".xlsx,.xls,.csv,.tsv,.txt" hidden>
         <span class="note">The first row must be headers. Recognised columns: <code>Name</code> <code>Phone</code> or <code>Mobile</code> <code>City</code> <code>Source</code> <code>Caller</code> (optional, the caller's name). Numbers already in your leads are skipped.</span></div>
       <div id="preview"></div></section>`;
   },
@@ -424,15 +468,36 @@ VIEWS.import = {
     showPreview();
   },
 };
-function guess(h) {
-  h = String(h).toLowerCase();
-  if (/caller|agent|assign/.test(h)) return "caller";
-  if (/name/.test(h)) return "name";
-  if (/phone|mobile|contact|number|whatsapp/.test(h)) return "phone";
-  if (/city|location|area|address/.test(h)) return "city";
-  if (/source|campaign|platform/.test(h)) return "source";
-  return "";
+/* ---- Reading lead files: works with our own template and with Meta Ads Manager exports ---- */
+const normHead = (h) => String(h ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+// Meta's technical columns that mean nothing to a caller.
+const SKIP_COLS = /^(id|lead_id|ad_id|adset_id|campaign_id|form_id|is_organic|ad_name|adset_name|form_name|inbox_url|lead_status|retailer_item_id|vehicle|home_listing)$/;
+const prettyLabel = (h) => { const t = String(h).replace(/_+/g, " ").replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "").replace(/\s+/g, " ").trim(); return t ? t[0].toUpperCase() + t.slice(1) : ""; };
+const prettyValue = (v) => { const t = String(v ?? "").trim(); return /@|https?:/.test(t) ? t : t.replace(/_+/g, " ").replace(/\s+/g, " ").trim(); };
+const cleanPhone = (v) => String(v ?? "").trim().replace(/^[^\d+]+/, "");
+
+/** Work out which column holds what. Returns { fields: {name, phone, ...: column index}, extras: [index], skipped: [index] } */
+function mapColumns(headers) {
+  const H = headers.map(normHead), used = new Set(), fields = {};
+  const pick = (key, exact, loose, avoid) => {
+    let i = H.findIndex((h, j) => !used.has(j) && exact.includes(h));
+    if (i < 0 && loose) i = H.findIndex((h, j) => !used.has(j) && loose.test(h) && !(avoid && avoid.test(h)));
+    if (i >= 0) { fields[key] = i; used.add(i); }
+  };
+  pick("caller", ["caller", "agent", "assigned_to", "caller_name"], /caller|agent|assign/);
+  pick("name", ["full_name", "name", "lead_name", "customer_name", "client_name", "contact_name"]);
+  if (fields.name == null && H.includes("first_name")) { pick("first", ["first_name"]); pick("last", ["last_name", "surname"]); }
+  if (fields.name == null && fields.first == null) pick("name", [], /name/, /^(ad|adset|campaign|form|file|company|business|father|user)_?name$|^(ad|adset|campaign|form)_/);
+  pick("phone", ["phone_number", "phone", "mobile", "mobile_number", "mobile_no", "contact_number", "contact_no", "contact", "number"], /phone|mobile|contact/, /whatsapp/);
+  pick("whatsapp", ["whatsapp_number", "whatsapp", "whatsapp_no"], /whatsapp/);
+  pick("city", ["city", "town", "location", "district"], /city/);
+  pick("source", ["source", "lead_source", "campaign_name", "campaign"], /source|campaign/, /_id$/);
+  pick("created", ["created_time", "created_at", "submitted_at", "date"], /created|submitted/);
+  const skipped = [], extras = [];
+  H.forEach((h, i) => { if (used.has(i) || !h) return; (SKIP_COLS.test(h) ? skipped : extras).push(i); });
+  return { fields, extras, skipped };
 }
+
 function parseFile(f) {
   if (!window.XLSX) return toast("The file reader couldn't load. Check your internet connection.");
   const r = new FileReader();
@@ -441,10 +506,31 @@ function parseFile(f) {
       const wb = XLSX.read(new Uint8Array(e.target.result), { type: "array" });
       const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "", raw: false });
       if (rows.length < 2) return toast("That file has no data rows.");
-      const map = rows[0].map(guess);
-      if (!map.includes("phone")) return toast("No Phone or Mobile column found in the first row.");
-      const out = rows.slice(1).map((r) => { const o = {}; map.forEach((k, i) => { if (k && !o[k]) o[k] = String(r[i]).trim(); }); return o; }).filter((o) => o.phone);
-      pending = { file: f.name, rows: out }; showPreview();
+      const headers = rows[0].map((h) => String(h).trim());
+      const m = mapColumns(headers), F = m.fields;
+      if (F.phone == null && F.whatsapp == null) return toast("No phone, mobile or WhatsApp column found in the first row.");
+      const cell = (r, i) => (i == null ? "" : String(r[i] ?? "").trim());
+      const out = rows.slice(1).map((r) => {
+        const phone = cleanPhone(cell(r, F.phone)) || cleanPhone(cell(r, F.whatsapp));
+        const wa = cleanPhone(cell(r, F.whatsapp));
+        const details = {};
+        m.extras.forEach((i) => { const v = prettyValue(r[i]); const k = prettyLabel(headers[i]); if (k && v) details[k] = v; });
+        if (wa && wa.replace(/\D/g, "").slice(-10) !== phone.replace(/\D/g, "").slice(-10)) details.WhatsApp = wa;
+        return {
+          name: cell(r, F.name) || [cell(r, F.first), cell(r, F.last)].filter(Boolean).join(" "),
+          phone, city: cell(r, F.city), source: cell(r, F.source), caller: cell(r, F.caller),
+          createdAt: cell(r, F.created), details,
+        };
+      }).filter((o) => o.phone);
+      if (!out.length) return toast("No rows with a phone number were found.");
+      const label = (k) => ({ name: "Name", first: "First name", last: "Last name", phone: "Phone", whatsapp: "WhatsApp", city: "City", source: "Source", caller: "Caller", created: "Lead date" })[k];
+      pending = {
+        file: f.name, rows: out,
+        mapping: Object.entries(F).map(([k, i]) => [label(k), headers[i]]),
+        extras: m.extras.map((i) => prettyLabel(headers[i])).filter(Boolean),
+        skipped: m.skipped.map((i) => headers[i]),
+      };
+      showPreview();
     } catch { toast("Could not read that file. Save it as .xlsx or .csv and try again."); }
   };
   r.readAsArrayBuffer(f);
@@ -455,6 +541,11 @@ function showPreview() {
   const active = CALLERS.filter((c) => c.active);
   p.innerHTML = `<div style="margin-top:18px;display:grid;gap:12px">
     <b>${esc(pending.file)}: ${num(pending.rows.length)} rows with a phone number</b>
+    <div class="mapbox">
+      <div><span class="label">Columns used</span><div>${pending.mapping.map(([a, b]) => `<span class="tag on">${esc(a)} ← ${esc(b)}</span>`).join("")}</div></div>
+      ${pending.extras.length ? `<div><span class="label">Saved as form answers</span><div>${pending.extras.map((x) => `<span class="tag">${esc(x)}</span>`).join("")}</div><span class="note">Callers see these when they open the lead.</span></div>` : ""}
+      ${pending.skipped.length ? `<div><span class="label">Ignored</span><div class="note">${pending.skipped.map(esc).join(", ")}</div></div>` : ""}
+    </div>
     <div class="row"><span class="label">Assign to</span>
       <select id="impTo"><option value="rr">Split evenly across all callers</option><option value="file">Use the Caller column from the file</option><option value="">Leave unassigned</option>${active.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select>
       </div>
@@ -462,8 +553,8 @@ function showPreview() {
       <select id="impShow"><option value="">No one yet</option>${ADMINS.map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join("")}</select>
       <span class="note">Use this when the file is one team lead's referrals.</span></div>
     <div class="row"><button class="btn primary" id="impGo">Import leads</button><button class="btn ghost" id="impX">Cancel</button></div>
-    <div class="tablebox stackbox"><table class="stack"><tr><th>Name</th><th>Phone</th><th>City</th><th>Source</th><th>Caller</th></tr>
-    ${pending.rows.slice(0, 12).map((r) => `<tr><td>${esc(r.name)}</td><td class="num">${esc(r.phone)}</td><td>${esc(r.city)}</td><td>${esc(r.source)}</td><td>${esc(r.caller)}</td></tr>`).join("")}</table></div>
+    <div class="tablebox stackbox"><table class="stack"><tr><th>Name</th><th>Phone</th><th>City</th><th>Source</th>${pending.mapping.some(([a]) => a === "Caller") ? "<th>Caller</th>" : ""}${pending.extras.length ? "<th>Form answers</th>" : ""}</tr>
+    ${pending.rows.slice(0, 12).map((r) => `<tr><td>${esc(r.name)}</td><td class="num">${esc(r.phone)}</td><td>${esc(r.city)}</td><td>${esc(r.source)}</td>${pending.mapping.some(([a]) => a === "Caller") ? `<td>${esc(r.caller)}</td>` : ""}${pending.extras.length ? `<td class="rm" style="max-width:320px">${esc(Object.entries(r.details).map(([k, v]) => `${k}: ${v}`).join(" · "))}</td>` : ""}</tr>`).join("")}</table></div>
     ${pending.rows.length > 12 ? `<span class="note">Showing first 12 of ${num(pending.rows.length)}</span>` : ""}</div>`;
   labelTables(p);
   $("#impX").onclick = () => { pending = null; showPreview(); };
@@ -665,7 +756,7 @@ VIEWS.queue = {
       <div class="kpi"><span class="label">Picked up</span><span class="v">${num(st.picked)}</span><span class="s">of ${num(st.calls)} calls made</span></div>
       <div class="kpi hero"><span class="label">Your sales</span><span class="v">${num(st.sales)}</span><span class="s">${showRev ? inr(st.revenue) + " closed" : "leads converted"}</span></div></div>
     <div class="chips" role="group" aria-label="Filter leads">${CVIEWS.map(([k, t]) => `<button class="chip" data-cv="${k}" aria-pressed="${k === cView}">${t}<b>${num(q.counts[k])}</b></button>`).join("")}</div>
-    <div class="queue">${qRows.map((l) => `<div class="lead"><span class="nm">${esc(l.name)}</span>${pill(l)}<span class="ph">${esc(l.phone)}</span><span class="note">${esc(l.city)}</span>
+    <div class="queue">${qRows.map((l) => `<div class="lead"><span class="nm">${esc(l.name)}${priorityOf(l.details) ? ` <span class="tag hot">${esc(priorityOf(l.details))}</span>` : ""}</span>${pill(l)}<span class="ph">${esc(l.phone)}</span><span class="note">${esc(l.city)}</span>
       <span class="meta">${l.follow_up && l.outcome === "callback" ? `Call back ${esc(l.follow_up)} · ` : ""}${esc(l.remarks) || esc(l.source)}</span>
       <div class="acts"><a class="btn primary callbtn" href="${telOf(l.phone)}" data-call="${l.id}">${PHONE_ICON}Call</a><button class="btn" data-open="${l.id}">Add note</button></div></div>`).join("")
       || '<div class="panel empty">Nothing in this list.</div>'}</div>
@@ -686,8 +777,9 @@ function callReport(l, afterCall) {
     openDrawer({
       title: l.name, saveLabel: "Save call", focus: false,
       eyebrow: afterCall ? `<div class="label" style="color:var(--accent)">How did the call go?</div>` : "",
-      body: `<div class="q"><span class="label">Number</span><div class="row"><span class="callnow">${esc(l.phone)}</span><a class="btn primary sm callbtn" style="flex:0" href="${telOf(l.phone)}">${PHONE_ICON}Call</a></div>
+      body: `<div class="q"><span class="label">Number</span><div class="row"><span class="callnow">${esc(l.phone)}</span><a class="btn primary sm callbtn" style="flex:0" href="${telOf(l.phone)}">${PHONE_ICON}Call</a><a class="btn sm" href="${waOf(l.details?.WhatsApp || l.phone)}" target="_blank" rel="noopener">WhatsApp</a></div>
           ${afterCall ? `<div class="after">Call started. Fill this in when you hang up.</div>` : ""}</div>
+        ${l.details ? `<details class="q formans" ${l.called ? "" : "open"}><summary class="label">Form answers</summary>${answersHtml(l.details)}</details>` : ""}
         <div class="q"><span class="label">Did they pick up?</span><div class="opts" id="op">${PICK.map(([k, v]) => `<button type="button" data-v="${k}" aria-pressed="${d.picked === k}">${v}</button>`).join("")}</div></div>
         ${d.picked === "yes" ? `<div class="q"><span class="label">Response</span><div class="opts" id="oo">${OUT.map(([k, v]) => `<button type="button" data-v="${k}" aria-pressed="${d.outcome === k}">${v}</button>`).join("")}</div></div>` : ""}
         ${d.picked === "yes" && d.outcome === "callback" ? `<div class="q"><label class="label" for="fu">Call back on</label><input type="date" id="fu" value="${esc(d.followUp || localDate())}"></div>` : ""}

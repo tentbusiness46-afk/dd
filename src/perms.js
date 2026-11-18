@@ -8,8 +8,9 @@ export const PERMS = [
   { key: "callerPerformance", label: "Caller performance", help: "Calls, pick-ups and sales per caller, on their leads" },
   { key: "sources", label: "Lead sources", help: "Their leads broken down by source" },
   { key: "export", label: "Export to Excel", help: "Download the leads they can see" },
+  { key: "editStatus", label: "Change lead status", help: "Update the call result and follow-up date on the leads they can see" },
 ];
-const DEFAULT_ON = ["leads", "followUps", "calls"];
+const DEFAULT_ON = ["leads", "followUps", "calls", "editStatus"];
 
 /** Super admin sees everything, including real money figures. */
 export const allPerms = () => ({ ...Object.fromEntries(PERMS.map((p) => [p.key, true])), revenue: true, expenses: true, roi: true });

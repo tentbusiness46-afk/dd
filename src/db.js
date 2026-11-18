@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS leads (
   remarks      TEXT,
   follow_up    TEXT,
   deal_value   REAL NOT NULL DEFAULT 0,
+  details      TEXT,                 -- extra form answers from the lead file (JSON), e.g. Meta lead form questions
   attempts     INTEGER NOT NULL DEFAULT 0,
   converted_at INTEGER,
   updated_at   INTEGER,
@@ -104,6 +105,7 @@ CREATE TABLE IF NOT EXISTS call_logs (
   remarks     TEXT,
   follow_up   TEXT,
   deal_value  REAL NOT NULL DEFAULT 0,
+  is_call     INTEGER NOT NULL DEFAULT 1,   -- 0 = status changed by an admin or the super admin, not a call
   created_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS logs_time ON call_logs(created_at);
@@ -147,6 +149,10 @@ export async function migrate() {
   const have = new Set((await all("SELECT name FROM pragma_table_info('users')")).map((c) => c.name));
   for (const [col, type] of [["revenue_amount", "REAL"], ["revenue_note", "TEXT"], ["revenue_updated_at", "INTEGER"]])
     if (!have.has(col)) await db.execute(`ALTER TABLE users ADD COLUMN ${col} ${type}`);
+  const leadCols = new Set((await all("SELECT name FROM pragma_table_info('leads')")).map((c) => c.name));
+  if (!leadCols.has("details")) await db.execute("ALTER TABLE leads ADD COLUMN details TEXT");
+  const logCols = new Set((await all("SELECT name FROM pragma_table_info('call_logs')")).map((c) => c.name));
+  if (!logCols.has("is_call")) await db.execute("ALTER TABLE call_logs ADD COLUMN is_call INTEGER NOT NULL DEFAULT 1");
   // Capitalise names saved before names were capitalised automatically.
   const { personName } = await import("./util.js");
   for (const u of await all("SELECT id, name FROM users")) {

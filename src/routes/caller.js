@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { all, one, batch, getSettings } from "../db.js";
 import { requireAuth, role } from "../auth.js";
-import { newId, now, str, fail, PICKED, OUTCOMES } from "../util.js";
+import { newId, now, str, fail, parseDetails, PICKED, OUTCOMES } from "../util.js";
 
 const r = Router();
 r.use("/caller", requireAuth, role("caller"));
@@ -14,7 +14,7 @@ const VIEWS = {
   int: { where: "picked = 'yes' AND outcome = 'interested'", order: "updated_at DESC" },
   all: { where: "1 = 1", order: "updated_at DESC" },
 };
-const COLS = "id, name, phone, city, source, called, picked, outcome, remarks, follow_up, deal_value, attempts, updated_at";
+const COLS = "id, name, phone, city, source, called, picked, outcome, remarks, follow_up, deal_value, details, attempts, updated_at, created_at";
 
 r.get("/caller/leads", async (req, res) => {
   const v = VIEWS[req.query.view] ? req.query.view : "todo";
@@ -22,7 +22,7 @@ r.get("/caller/leads", async (req, res) => {
     `SELECT ${Object.entries(VIEWS).map(([k, x]) => `COALESCE(SUM(${x.where}),0) AS "${k}"`).join(", ")} FROM leads WHERE assigned_to = ?`, [req.user.id]);
   const rows = await all(`SELECT ${COLS} FROM leads WHERE assigned_to = ? AND ${VIEWS[v].where} ORDER BY ${VIEWS[v].order} LIMIT 300`, [req.user.id]);
   if (!req.showRevenue) rows.forEach((x) => delete x.deal_value);
-  res.json({ counts, rows: rows.map((x) => ({ ...x, called: !!x.called })) });
+  res.json({ counts, rows: rows.map((x) => ({ ...x, called: !!x.called, details: parseDetails(x.details) })) });
 });
 
 r.get("/caller/stats", async (req, res) => {
@@ -30,7 +30,7 @@ r.get("/caller/stats", async (req, res) => {
     one(`SELECT COUNT(*) total, COALESCE(SUM(called = 0),0) pending, COALESCE(SUM(outcome = 'converted'),0) won,
                 COALESCE(SUM(CASE WHEN outcome = 'converted' THEN deal_value END),0) rev
          FROM leads WHERE assigned_to = ?`, [req.user.id]),
-    one("SELECT COUNT(*) made, COALESCE(SUM(picked = 'yes'),0) picked FROM call_logs WHERE caller_id = ?", [req.user.id]),
+    one("SELECT COUNT(*) made, COALESCE(SUM(picked = 'yes'),0) picked FROM call_logs WHERE caller_id = ? AND is_call = 1", [req.user.id]),
   ]);
   const out = { assigned: a.total, pending: a.pending, calls: c.made, picked: c.picked, sales: a.won };
   if (req.showRevenue) out.revenue = a.rev;
@@ -63,7 +63,7 @@ r.get("/caller/leads/:id/history", async (req, res) => {
   const lead = await one("SELECT id FROM leads WHERE id = ? AND assigned_to = ?", [req.params.id, req.user.id]);
   if (!lead) fail(404, "Lead not found.");
   const rows = await all(
-    `SELECT c.created_at, c.picked, c.outcome, c.remarks, c.follow_up, c.deal_value, u.name caller
+    `SELECT c.created_at, c.picked, c.outcome, c.remarks, c.follow_up, c.deal_value, c.is_call, u.name caller
      FROM call_logs c LEFT JOIN users u ON u.id = c.caller_id WHERE c.lead_id = ? ORDER BY c.created_at DESC`, [lead.id]);
   if (!req.showRevenue) rows.forEach((x) => delete x.deal_value);
   res.json(rows);
@@ -72,7 +72,7 @@ r.get("/caller/leads/:id/history", async (req, res) => {
 r.get("/caller/log", async (req, res) => {
   res.json(await all(
     `SELECT c.created_at, c.picked, c.outcome, c.remarks, l.name, l.phone
-     FROM call_logs c JOIN leads l ON l.id = c.lead_id WHERE c.caller_id = ? ORDER BY c.created_at DESC LIMIT 300`, [req.user.id]));
+     FROM call_logs c JOIN leads l ON l.id = c.lead_id WHERE c.caller_id = ? AND c.is_call = 1 ORDER BY c.created_at DESC LIMIT 300`, [req.user.id]));
 });
 
 export default r;

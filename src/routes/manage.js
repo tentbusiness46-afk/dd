@@ -5,7 +5,7 @@ import { all, one, run, batch, getSettings, setSettings } from "../db.js";
 import { requireAuth, role, sign } from "../auth.js";
 import { PERMS, cleanPerms, parsePerms, defaultPerms, allPerms } from "../perms.js";
 import { leadFilter } from "../leadFilter.js";
-import { newId, normPhone, now, str, personName, fail, todayLocal, OPEN_SQL, placeholders, chunk } from "../util.js";
+import { newId, normPhone, now, str, personName, cleanDetails, cleanPhoneText, fail, todayLocal, OPEN_SQL, placeholders, chunk } from "../util.js";
 
 const r = Router();
 r.use("/manage", requireAuth, role("superadmin"));
@@ -73,9 +73,12 @@ r.post("/manage/leads/import", async (req, res) => {
     if (mode === "rr" && callers.length) to = callers[i++ % callers.length].id;
     else if (mode === "file") to = byName[String(row.caller || "").trim().toLowerCase()] || null;
     else if (mode && mode !== "rr") to = mode;
+    // Use the date the lead came in (e.g. Meta's created_time) when the file has one.
+    const when = Date.parse(row.createdAt || "");
+    const createdAt = when > 0 && when <= t + 3600e3 ? when : t;
     stmts.push({
-      sql: "INSERT OR IGNORE INTO leads (id, name, phone, phone_norm, city, source, assigned_to, created_at) VALUES (?,?,?,?,?,?,?,?)",
-      args: [newId(), str(row.name, 100) || "(no name)", str(row.phone, 20), phone, str(row.city, 80), str(row.source || req.body.defaultSource, 80), to, t],
+      sql: "INSERT OR IGNORE INTO leads (id, name, phone, phone_norm, city, source, assigned_to, details, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+      args: [newId(), str(row.name, 100) || "(no name)", cleanPhoneText(row.phone), phone, str(row.city, 80), str(row.source || req.body.defaultSource, 80), to, cleanDetails(row.details), createdAt],
     });
   }
   const added = await batch(stmts);

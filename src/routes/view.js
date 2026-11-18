@@ -1,8 +1,8 @@
 // Read-only routes shared by the super admin (sees everything) and admins (see only what's shared with them).
 import { Router } from "express";
-import { all, one } from "../db.js";
+import { all, one, batch } from "../db.js";
 import { requireAuth, role, can } from "../auth.js";
-import { fail, range, todayLocal, maskPhone, scopeSql } from "../util.js";
+import { fail, range, todayLocal, maskPhone, scopeSql, parseDetails, newId, now, str, PICKED, OUTCOMES } from "../util.js";
 import { leadFilter } from "../leadFilter.js";
 
 const r = Router();
@@ -17,6 +17,8 @@ function shape(row, view) {
   if (!P.phones && o.phone) o.phone = maskPhone(o.phone);
   delete o.phone_norm;
   if (!P.notes) delete o.remarks;
+  // Form answers (e.g. from Meta lead forms) count as call notes for admins.
+  if ("details" in o) { o.details = P.notes ? parseDetails(o.details) : null; if (o.details && !P.phones && o.details.WhatsApp) o.details.WhatsApp = maskPhone(o.details.WhatsApp); }
   if (!view.real) delete o.deal_value;
   return o;
 }
@@ -57,7 +59,7 @@ r.get("/view/stats", async (req, res) => {
     out.followUps = rows.map((x) => shape(x, V));
   }
   if (P.calls) {
-    const c = await one(`SELECT COUNT(*) made, COALESCE(SUM(picked = 'yes'),0) picked FROM call_logs WHERE created_at BETWEEN ? AND ? AND ${C.sql}`, [from, to, ...C.args]);
+    const c = await one(`SELECT COUNT(*) made, COALESCE(SUM(picked = 'yes'),0) picked FROM call_logs WHERE is_call = 1 AND created_at BETWEEN ? AND ? AND ${C.sql}`, [from, to, ...C.args]);
     out.calls = {
       made: c.made, picked: c.picked,
       funnel: [["Leads added", cohort.total], ["Called", cohort.called], ["Picked up", cohort.picked], ["Interested+", cohort.warm], ["Converted", cohort.won]],
@@ -86,7 +88,7 @@ r.get("/view/stats", async (req, res) => {
 
   if (P.callerPerformance) {
     const [logs, won, load] = await Promise.all([
-      all(`SELECT caller_id, COUNT(*) made, SUM(picked = 'yes') picked FROM call_logs WHERE created_at BETWEEN ? AND ? AND ${C.sql} GROUP BY caller_id`, [from, to, ...C.args]),
+      all(`SELECT caller_id, COUNT(*) made, SUM(picked = 'yes') picked FROM call_logs WHERE is_call = 1 AND created_at BETWEEN ? AND ? AND ${C.sql} GROUP BY caller_id`, [from, to, ...C.args]),
       all(`SELECT assigned_to, COUNT(*) won, SUM(deal_value) rev FROM leads WHERE outcome = 'converted' AND converted_at BETWEEN ? AND ? AND ${L.sql} GROUP BY assigned_to`, [from, to, ...L.args]),
       all(`SELECT assigned_to, COUNT(*) assigned, SUM(called = 0) pending FROM leads WHERE assigned_to IS NOT NULL AND ${L.sql} GROUP BY assigned_to`, L.args),
     ]);
@@ -120,7 +122,7 @@ r.get("/view/stats", async (req, res) => {
 });
 
 /* ---------------- Leads (read) ---------------- */
-const LEAD_COLS = "id, name, phone, city, source, assigned_to, called, picked, outcome, remarks, follow_up, deal_value, attempts, updated_at, created_at";
+const LEAD_COLS = "id, name, phone, city, source, assigned_to, called, picked, outcome, remarks, follow_up, deal_value, details, attempts, updated_at, created_at";
 
 r.get("/view/leads", can("leads"), async (req, res) => {
   const { where, args } = leadFilter(req.query, req.view);
@@ -146,9 +148,36 @@ r.get("/view/leads/:id/history", can("notes"), async (req, res) => {
   const lead = await one(`SELECT id FROM leads WHERE id = ? AND ${s.sql}`, [req.params.id, ...s.args]);
   if (!lead) fail(404, "Lead not found.");
   const rows = await all(
-    `SELECT c.created_at, c.picked, c.outcome, c.remarks, c.follow_up, c.deal_value, u.name caller
+    `SELECT c.created_at, c.picked, c.outcome, c.remarks, c.follow_up, c.deal_value, c.is_call, u.name caller
      FROM call_logs c LEFT JOIN users u ON u.id = c.caller_id WHERE c.lead_id = ? ORDER BY c.created_at DESC`, [lead.id]);
   res.json(rows.map((x) => shape(x, req.view)));
+});
+
+/* ---------------- Change a lead's status (super admin, and admins with "Change lead status") ---------------- */
+r.post("/view/leads/:id/status", async (req, res) => {
+  const V = req.view;
+  if (!V.real && !V.perms.editStatus) fail(403, "Changing lead status isn't enabled for your account.");
+  const s = scopeSql(V, "id");
+  const lead = await one(`SELECT id, remarks, deal_value, outcome, converted_at FROM leads WHERE id = ? AND ${s.sql}`, [req.params.id, ...s.args]);
+  if (!lead) fail(404, "Lead not found.");
+  const b = req.body || {};
+  const picked = String(b.picked || "");
+  if (!PICKED.includes(picked)) fail(400, "Choose whether they picked up.");
+  const outcome = picked === "yes" ? String(b.outcome || "") : null;
+  if (picked === "yes" && !OUTCOMES.includes(outcome)) fail(400, "Choose their response.");
+  const followUp = outcome === "callback" && /^\d{4}-\d{2}-\d{2}$/.test(b.followUp || "") ? b.followUp : null;
+  // Only the super admin enters sale values; an admin's change keeps whatever value was there.
+  const deal = outcome !== "converted" ? 0 : V.real ? Math.max(0, +b.dealValue || 0) : lead.outcome === "converted" ? lead.deal_value : 0;
+  const note = str(b.remarks, 1000), t = now();
+  const remarks = note || lead.remarks || "";   // a blank note keeps the caller's last note
+  const convertedAt = outcome === "converted" ? lead.converted_at || t : null;
+  await batch([
+    { sql: `UPDATE leads SET called = 1, picked = ?, outcome = ?, remarks = ?, follow_up = ?, deal_value = ?, converted_at = ?, updated_at = ? WHERE id = ?`,
+      args: [picked, outcome, remarks, followUp, deal, convertedAt, t, lead.id] },
+    { sql: `INSERT INTO call_logs (id, lead_id, caller_id, picked, outcome, remarks, follow_up, deal_value, is_call, created_at) VALUES (?,?,?,?,?,?,?,?,0,?)`,
+      args: [newId(), lead.id, req.user.id, picked, outcome, note, followUp, deal, t] },
+  ]);
+  res.json({ ok: true });
 });
 
 r.get("/view/export", can("leads"), can("export"), async (req, res) => {

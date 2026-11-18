@@ -198,3 +198,18 @@ h2 .muted{font-family:var(--f-body)}
   .selall-m{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:500;margin-bottom:10px}
   .selall-m input{width:18px;height:18px;accent-color:var(--accent)}
 }
+
+/* Form answers from lead files (e.g. Meta lead forms) */
+.answers{display:grid;grid-template-columns:minmax(110px,auto) 1fr;gap:6px 14px;margin:6px 0 0;font-size:14px}
+.answers dt{color:var(--muted);font-size:13px}
+.answers dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.formans summary{cursor:pointer;list-style-position:inside}
+.formans[open] summary{margin-bottom:4px}
+.tag.hot{background:var(--warn-soft);color:var(--warn);font-weight:600}
+.mapbox{display:grid;gap:10px;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--sunk)}
+.mapbox .label{display:block;margin-bottom:4px}
+a.btn{text-decoration:none;display:inline-flex;align-items:center;justify-content:center;color:inherit}a.btn.primary{color:var(--accent-ink)}
+
+/* Status cell with a Change button */
+.stcell{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
+.stcell .btn.sm{padding:3px 8px;font-size:12.5px;color:var(--accent)}
